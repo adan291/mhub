@@ -1,0 +1,76 @@
+app = 'mhub'
+primary_region = 'mad'
+
+[build]
+
+# Variables de entorno NO sensibles. Un único proceso sirve HubBot + API_Web
+# sobre el mismo volumen (Req 14.3); el módulo `api` arranca Uvicorn en este
+# mismo PORT y conserva la ruta de salud `/` para el health-check de Fly.io.
+[env]
+  PORT = '8080'
+  DATA_DIR = '/data'
+  # Origen del Frontend_Web (Vercel/Netlify/Cloudflare Pages). CORS de la API
+  # se restringe a este origen (Req 14.4). Ajustar al dominio real del front.
+  FRONTEND_ORIGIN = 'https://mhub.example.com'
+  # Cookie de Sesion_Web marcada Secure en producción (HTTPS).
+  COOKIE_SECURE = '1'
+  # Límite de peticiones por minuto e IP/identidad (Req 12.4). 0 rechaza todo.
+  RATE_LIMIT_PER_MINUTE = '120'
+
+# Secretos OAuth2/sesión: NO se declaran aquí en claro. Se cargan como secretos
+# cifrados de Fly.io y quedan expuestos como variables de entorno al proceso.
+# Configurarlos una sola vez con:
+#
+#   fly secrets set DISCORD_TOKEN_HUB=...        # token del bot de Discord
+#   fly secrets set DISCORD_CLIENT_ID=...        # OAuth2 (Req 7.1)
+#   fly secrets set DISCORD_CLIENT_SECRET=...    # OAuth2 (Req 7.1)
+#   fly secrets set OAUTH_REDIRECT_URI=https://<app>.fly.dev/auth/callback
+#   fly secrets set SESSION_SECRET=...           # firma de la cookie de sesión (Req 7.2)
+#
+# (Opcional) GUILD_ID / CHANNEL_ID también pueden definirse como secretos o env.
+
+[processes]
+  app = 'python main.py'
+
+# Volumen persistente: todas las SQLite (events, registry, guild_config) viven
+# bajo /data a través de los stores (Req 14.1, 14.2). El proceso `app` que
+# sirve bot + API monta este mismo volumen (Req 14.3).
+[[mounts]]
+  source = 'app_data_hub'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8080
+  processes = ['app']
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 25
+    soft_limit = 20
+
+  [[services.tcp_checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '1s'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

@@ -1,0 +1,25 @@
+{
+  "mitica": {
+    "titulo": "Grupo para míticas",
+    "roles": {
+      "tank": { "emoji": "🛡️", "plazas": 1 },
+      "dps":  { "emoji": "⚔️", "plazas": 3 },
+      "heal": { "emoji": "💖", "plazas": 1 }
+    }
+  },
+  "raid": {
+    "titulo": "Raid",
+    "roles": {
+      "tank": { "emoji": "🛡️", "plazas": 2 },
+      "dps":  { "emoji": "⚔️", "plazas": 14 },
+      "heal": { "emoji": "💖", "plazas": 4 }
+    }
+  },
+  "dnd": {
+    "titulo": "Partida de rol",
+    "roles": {
+      "dm":      { "emoji": "📖", "plazas": 1 },
+      "jugador": { "emoji": "🎲", "plazas": 4 }
+    }
+  }
+}

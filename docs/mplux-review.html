@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mplux — Revisión y propuesta de abstracción</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --text: #d6dae3; --muted: #8b92a3;
+    --accent: #7aa2f7; --border: #262a36; --code-bg: #1b1f2a;
+    --red: #f7768e; --orange: #ff9e64; --yellow: #e0af68; --green: #9ece6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65; font-size: 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .25em; }
+  h2 { font-size: 1.4rem; margin: 2.2em 0 .6em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 1.6em 0 .5em; color: var(--accent); }
+  blockquote {
+    margin: 1em 0; padding: .6em 1.1em; border-left: 4px solid var(--accent);
+    background: var(--panel); color: var(--muted); border-radius: 0 8px 8px 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg); padding: .15em .4em; border-radius: 5px;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: .88em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .94rem; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: var(--panel); }
+  tr:nth-child(even) td { background: #13161e; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.4em 0; }
+  ul, ol { padding-left: 1.4em; }
+  li { margin: .3em 0; }
+  .tag { font-weight: 600; }
+  .red { color: var(--red); } .orange { color: var(--orange); }
+  .yellow { color: var(--yellow); } .green { color: var(--green); }
+  .lead { color: var(--muted); font-size: 1.05rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Mplux — Revisión, mejoras y propuesta de abstracción</h1>
+<p class="lead">Bot de Discord para buscar grupo de míticas (M+) en World of Warcraft.</p>
+<hr>
+
+<h2>1. Qué hace hoy</h2>
+<p>Con el comando <code>!mplux &lt;mazmorra+nivel&gt; &lt;rol&gt;</code> el bot crea un <em>embed</em> con la composición fija de una mítica de WoW (1 tank, 3 dps, 1 heal). Los usuarios se apuntan reaccionando con emojis (🛡️ tank, ⚔️ dps, 💖 heal), y el bot va rellenando los huecos y editando el mensaje. También borra mensajes antiguos del canal de forma periódica.</p>
+
+<h3>Flujo actual</h3>
+<ol>
+  <li><code>main.py</code> carga token e intents y arranca <code>MyBot</code> con un <code>channel_id</code> fijo.</li>
+  <li><code>bot.py</code> registra el cog <code>MplusCommand</code> y escucha reacciones.</li>
+  <li><code>team_manager.py</code> guarda los equipos en un diccionario en memoria.</li>
+  <li><code>embed_manager.py</code> construye y actualiza el embed.</li>
+  <li><code>message_manager.py</code> borra mensajes tras un retraso y limpia el canal cada 5 min.</li>
+</ol>
+
+<h3>Estructura de archivos</h3>
+<table>
+  <tr><th>Archivo</th><th>Responsabilidad</th></tr>
+  <tr><td><code>main.py</code></td><td>Arranque, carga de entorno, webserver de salud</td></tr>
+  <tr><td><code>bot.py</code></td><td>Cliente de Discord, eventos, registro de cogs</td></tr>
+  <tr><td><code>comands/mplux_command.py</code></td><td>Comando <code>!mplux</code> y lógica de reacciones</td></tr>
+  <tr><td><code>team_manager.py</code></td><td>Estado de los equipos (en memoria)</td></tr>
+  <tr><td><code>embed_manager.py</code></td><td>Construcción y actualización de embeds</td></tr>
+  <tr><td><code>message_manager.py</code></td><td>Borrado y limpieza de mensajes</td></tr>
+  <tr><td><code>localization.py</code></td><td>Textos en ES/EN (<strong>no se usa</strong>)</td></tr>
+  <tr><td><code>config.py</code></td><td>Token e intents</td></tr>
+  <tr><td><code>webserver.py</code></td><td>Health check para Fly.io</td></tr>
+</table>
+
+<h2>2. Problemas detectados</h2>
+
+<h3 class="red">🔴 Críticos</h3>
+<ul>
+  <li><span class="tag">on_reaction_add duplicado.</span> Está definido en <code>bot.py</code> <strong>y</strong> en el cog <code>mplux_command.py</code>. Ambos se ejecutan en cada reacción, con lógicas distintas (uno comprueba si el rol está lleno <em>antes</em> de añadir, el otro <em>después</em>). Resultado: doble conteo y comportamiento inconsistente. <strong>Es un bug real.</strong></li>
+  <li><span class="tag">Estado solo en memoria.</span> Los equipos viven en <code>TeamManager.teams</code> (un <code>dict</code>). Si el bot se reinicia —y en Fly.io se reinicia en cada deploy— se pierden todos los grupos activos.</li>
+</ul>
+
+<h3 class="orange">🟠 Importantes</h3>
+<ul>
+  <li><span class="tag">Composición y canal hardcodeados.</span> <code>{tank:1, dps:3, heal:1}</code> y el <code>channel_id</code> (<code>1279108276016906292</code>) están escritos en el código.</li>
+  <li><span class="tag">Reacciones en vez de botones.</span> Las reacciones de emoji son <em>legacy</em>, dependen de permisos para quitarlas y son frágiles. Los botones (Views) son el estándar actual.</li>
+  <li><span class="tag">localization.py sin usar.</span> Hay infraestructura de idiomas que nunca se invoca; los textos están en español dentro del código.</li>
+</ul>
+
+<h3 class="yellow">🟡 Menores</h3>
+<ul>
+  <li><code>create_initial_embed</code> recibe <code>roles_necesarios</code> ya decrementado, lo que hace la lógica de los campos confusa y frágil.</li>
+  <li>La limpieza periódica de mensajes es agresiva (borra todo lo viejo del canal).</li>
+  <li>Comandos por prefijo (<code>!mplux</code>) en lugar de slash commands (<code>/</code>).</li>
+</ul>
+
+<h2>3. Mejoras recomendadas (sin reescribir)</h2>
+<ol>
+  <li><strong>Eliminar el <code>on_reaction_add</code> de <code>bot.py</code></strong> y dejar solo el del cog, unificando la lógica de "añadir y comprobar lleno".</li>
+  <li><strong>Persistir los equipos</strong> en SQLite o JSON para sobrevivir a reinicios.</li>
+  <li><strong>Mover <code>channel_id</code> y la composición a configuración</strong> (variables de entorno o un <code>config.yaml</code>).</li>
+  <li><strong>Conectar <code>localization.py</code></strong> o eliminarlo si no se va a usar.</li>
+  <li><strong>Suavizar la limpieza de mensajes</strong>: borrar solo los mensajes propios del bot o los de grupos ya completados.</li>
+</ol>
+
+<h2>4. Propuesta de abstracción</h2>
+<blockquote>Mplux no es realmente "de WoW": es un bot de inscripción a eventos con roles y cupos.</blockquote>
+<p>El patrón es: <em>"define unos roles con un número de plazas, la gente se apunta, se llena"</em>. Eso sirve para muchísimo más que míticas:</p>
+<ul>
+  <li>Raids y otros juegos (LoL/Valorant: 5 plazas por posición).</li>
+  <li>Partidas de rol / D&amp;D (1 DM + 4 jugadores).</li>
+  <li>Deportes (portero, defensas, delanteros…).</li>
+  <li>Quedadas y eventos con cupo (RSVP).</li>
+  <li>Turnos de trabajo o voluntariado.</li>
+</ul>
+
+<h3>Idea central: plantillas configurables</h3>
+<p>En vez de <code>{tank:1, dps:3, heal:1}</code> hardcodeado, definir <strong>plantillas de evento</strong> por servidor:</p>
+<pre><code># config/plantillas.yaml
+mitica:
+  titulo: "Grupo para míticas"
+  roles:
+    tank: { emoji: "🛡️", plazas: 1 }
+    dps:  { emoji: "⚔️", plazas: 3 }
+    heal: { emoji: "💖", plazas: 1 }
+
+raid:
+  titulo: "Raid"
+  roles:
+    tank: { emoji: "🛡️", plazas: 2 }
+    dps:  { emoji: "⚔️", plazas: 14 }
+    heal: { emoji: "💖", plazas: 4 }
+
+dnd:
+  titulo: "Partida de rol"
+  roles:
+    dm:       { emoji: "📖", plazas: 1 }
+    jugador:  { emoji: "🎲", plazas: 4 }</code></pre>
+
+<p>Uso genérico:</p>
+<pre><code>/evento crear plantilla:mitica titulo:"Cúpula +15"
+/evento crear plantilla:dnd  titulo:"Maldición de Strahd"</code></pre>
+
+<h3>Beneficios</h3>
+<ul>
+  <li>Un mismo bot vale para cualquier comunidad, no solo WoW.</li>
+  <li>Las plantillas se editan sin tocar código.</li>
+  <li>Migrando a slash commands + botones gana fiabilidad y autocompletado.</li>
+</ul>
+
+<h2>5. Hoja de ruta sugerida</h2>
+<table>
+  <tr><th>Fase</th><th>Objetivo</th><th>Riesgo</th></tr>
+  <tr><td>1</td><td>Arreglar bug del <code>on_reaction_add</code> y persistir estado</td><td class="green">Bajo</td></tr>
+  <tr><td>2</td><td>Mover canal y composición a configuración</td><td class="green">Bajo</td></tr>
+  <tr><td>3</td><td>Migrar a slash commands + botones (Views)</td><td class="yellow">Medio</td></tr>
+  <tr><td>4</td><td>Plantillas de evento configurables por servidor</td><td class="yellow">Medio</td></tr>
+  <tr><td>5</td><td>Núcleo compartido con el otro bot (ver doc de mprof)</td><td class="yellow">Medio</td></tr>
+</table>
+
+</div>
+</body>
+</html>

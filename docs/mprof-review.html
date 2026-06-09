@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mprof — Revisión y propuesta de abstracción</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --text: #d6dae3; --muted: #8b92a3;
+    --accent: #7aa2f7; --border: #262a36; --code-bg: #1b1f2a;
+    --red: #f7768e; --orange: #ff9e64; --yellow: #e0af68; --green: #9ece6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65; font-size: 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .25em; }
+  h2 { font-size: 1.4rem; margin: 2.2em 0 .6em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 1.6em 0 .5em; color: var(--accent); }
+  blockquote {
+    margin: 1em 0; padding: .6em 1.1em; border-left: 4px solid var(--accent);
+    background: var(--panel); color: var(--muted); border-radius: 0 8px 8px 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg); padding: .15em .4em; border-radius: 5px;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: .88em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .94rem; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: var(--panel); }
+  tr:nth-child(even) td { background: #13161e; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.4em 0; }
+  ul, ol { padding-left: 1.4em; }
+  li { margin: .3em 0; }
+  .tag { font-weight: 600; }
+  .red { color: var(--red); } .orange { color: var(--orange); }
+  .yellow { color: var(--yellow); } .green { color: var(--green); }
+  .lead { color: var(--muted); font-size: 1.05rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>mprof — Revisión, mejoras y propuesta de abstracción</h1>
+<p class="lead">Bot de Discord para registrar y buscar artesanos (profesiones) de World of Warcraft.</p>
+<hr>
+
+<h2>1. Qué hace hoy</h2>
+<p>Permite a una comunidad llevar un registro de quién puede fabricar qué objeto. Comandos disponibles (por prefijo <code>!mprof</code>):</p>
+<ul>
+  <li><code>registrar &lt;personaje&gt; &lt;categoria&gt; &lt;enlace&gt;</code> — registra un artesano.</li>
+  <li><code>buscar &lt;categoria&gt; &lt;objeto&gt;</code> — busca quién fabrica un objeto.</li>
+  <li><code>list</code> — lista todos los registros.</li>
+  <li><code>borrar &lt;personaje&gt; &lt;categoria&gt; &lt;enlace&gt;</code> — elimina un registro propio.</li>
+  <li><code>backup</code> — envía el archivo SQLite al canal.</li>
+</ul>
+<p>Los datos se guardan en SQLite (<code>data/crafters_db.sqlite</code>). Las categorías son las 8 profesiones de WoW y los enlaces deben ser de <code>wowhead.com</code>.</p>
+
+<h3>Estructura de archivos</h3>
+<table>
+  <tr><th>Archivo</th><th>Responsabilidad</th></tr>
+  <tr><td><code>main.py</code></td><td>Arranque, carga de entorno, webserver de salud</td></tr>
+  <tr><td><code>bot.py</code></td><td>Cliente de Discord, enrutado de comandos por <code>on_message</code></td></tr>
+  <tr><td><code>commands.py</code></td><td>Lógica de registrar/buscar/listar/borrar</td></tr>
+  <tr><td><code>database.py</code></td><td>Acceso a SQLite y normalización de texto</td></tr>
+  <tr><td><code>profesiones.py</code></td><td>Lista de categorías válidas (WoW)</td></tr>
+  <tr><td><code>utils.py</code></td><td><strong>Duplicado muerto</strong> de categorías + <code>normalize_text</code></td></tr>
+  <tr><td><code>config.py</code></td><td>Token e intents</td></tr>
+  <tr><td><code>webserver.py</code></td><td>Health check para Fly.io</td></tr>
+</table>
+
+<h2>2. Problemas detectados</h2>
+
+<h3 class="red">🔴 Críticos</h3>
+<ul>
+  <li><span class="tag">Persistencia efímera en Fly.io.</span> El SQLite se guarda en <code>./data</code> dentro del contenedor. En Fly.io ese disco es efímero: <strong>cada redeploy borra todos los registros</strong>. La existencia del comando <code>backup</code> sugiere que ya os habéis topado con esto. Falta un volumen persistente (o una base externa).</li>
+</ul>
+
+<h3 class="orange">🟠 Importantes</h3>
+<ul>
+  <li><span class="tag">Código duplicado e inconsistente.</span> <code>VALID_CATEGORIES</code> y <code>normalize_text</code> están en <code>profesiones.py</code> <strong>y</strong> en <code>utils.py</code>, con una discrepancia (<code>sastreria</code> vs <code>sastrería</code>). <code>utils.py</code> parece muerto y debería eliminarse.</li>
+  <li><span class="tag">Atado a WoW.</span> La validación exige enlaces de <code>https://www.wowhead.com/</code> y las categorías son profesiones de WoW. Es lo más específico del dominio.</li>
+  <li><span class="tag">Parseo manual de texto.</span> <code>message.content.split(' ', n)</code> es frágil ante espacios o comillas. Los slash commands resuelven esto con parámetros tipados.</li>
+</ul>
+
+<h3 class="yellow">🟡 Menores</h3>
+<ul>
+  <li>En <code>get_crafters</code> se reutiliza el nombre de variable <code>item_name</code>/<code>normalized_item_name</code> dentro del bucle, lo que dificulta leer el código.</li>
+  <li>La tabla no tiene índices; con muchos registros las búsquedas se degradan.</li>
+  <li>El comando <code>backup</code> envía la base entera al canal (posible fuga de <code>user_id</code>).</li>
+</ul>
+
+<h2>3. Mejoras recomendadas (sin reescribir)</h2>
+<ol>
+  <li><strong>Persistencia real</strong>: montar un volumen de Fly.io para <code>./data</code>, o migrar a Postgres. Es lo más urgente.</li>
+  <li><strong>Eliminar <code>utils.py</code></strong> y dejar una única fuente para categorías y <code>normalize_text</code>.</li>
+  <li><strong>Añadir índices</strong> en <code>(normalized_category, normalized_item_name)</code>.</li>
+  <li><strong>Parametrizar la validación de enlaces</strong>: en vez de exigir <code>wowhead.com</code>, permitir cualquier URL o un patrón configurable.</li>
+  <li><strong>Restringir <code>backup</code></strong> a administradores y enviarlo por DM, no al canal.</li>
+</ol>
+
+<h2>4. Propuesta de abstracción</h2>
+<blockquote>mprof no es realmente "de WoW": es un directorio/registro con categorías y proveedores.</blockquote>
+<p>El patrón es: <em>"registra entradas bajo categorías, con un enlace y un dueño; busca, lista, borra"</em>. Eso sirve para:</p>
+<ul>
+  <li>Directorio de habilidades/servicios de una comunidad.</li>
+  <li>Catálogo de objetos de cualquier juego.</li>
+  <li>Lista de recursos o enlaces por tema.</li>
+  <li>Mini-marketplace de la comunidad.</li>
+</ul>
+
+<h3>Idea central: categorías y validación configurables</h3>
+<p>Quitar las profesiones de WoW y el dominio de Wowhead, y hacerlos configurables por servidor:</p>
+<pre><code># config/registro.yaml
+nombre_entrada: "objeto"        # "objeto", "servicio", "recurso"...
+nombre_proveedor: "artesano"    # "artesano", "experto", "vendedor"...
+validacion_enlace: ".*"         # cualquier URL; o "https://www.wowhead.com/.*"
+categorias:
+  - alquimia
+  - herreria
+  - sastreria
+  - ingenieria</code></pre>
+<p>Así el mismo bot sirve para "quién sabe de X" en una comunidad técnica, o "quién vende Y" en un marketplace, solo cambiando el YAML.</p>
+
+<h3>Modelo de datos genérico</h3>
+<pre><code>entrada(
+  categoria, nombre, enlace,
+  norm_nombre, norm_categoria,
+  proveedor, user_id
+)</code></pre>
+<p>Es exactamente el esquema actual, pero con nombres neutrales (<code>entrada</code>/<code>proveedor</code> en lugar de <code>crafter</code>/<code>item</code>).</p>
+
+<h2>5. Hoja de ruta sugerida</h2>
+<table>
+  <tr><th>Fase</th><th>Objetivo</th><th>Riesgo</th></tr>
+  <tr><td>1</td><td>Volumen persistente / Postgres (no perder datos)</td><td class="green">Bajo</td></tr>
+  <tr><td>2</td><td>Eliminar <code>utils.py</code> y unificar categorías</td><td class="green">Bajo</td></tr>
+  <tr><td>3</td><td>Migrar a slash commands con parámetros tipados</td><td class="yellow">Medio</td></tr>
+  <tr><td>4</td><td>Categorías y validación de enlaces configurables</td><td class="yellow">Medio</td></tr>
+  <tr><td>5</td><td>Núcleo compartido con el otro bot (ver doc de Mplux)</td><td class="yellow">Medio</td></tr>
+</table>
+
+<h2>6. Visión común con Mplux</h2>
+<p>Ambos bots comparten mucho código (<code>config.py</code>, <code>webserver.py</code>, <code>Dockerfile</code>, <code>fly.toml</code>, manejo de token e intents). La propuesta de mayor alcance es un único proyecto con núcleo compartido y los dos comportamientos como módulos:</p>
+<pre><code>discord-toolkit/
+  core/
+    config.py        # token, intents, config por servidor
+    webserver.py     # health check (compartido)
+    storage.py       # persistencia
+  modules/
+    signups/         # ex-Mplux: plantillas de roles + botones
+    registry/        # ex-mprof: categorías + entradas
+  config/
+    guilds.yaml      # plantillas y categorías por servidor
+  main.py</code></pre>
+
+</div>
+</body>
+</html>
